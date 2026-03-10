@@ -248,9 +248,9 @@ type ClientInterface interface {
 {{$hasParams := .RequiresParamObject -}}
 {{$pathParams := .PathParams -}}
 {{$opid := .OperationId -}}
-{{/* Check for x-hey-idempotent extension or GET/HEAD methods (always safe to retry) */}}
+{{/* Check for x-hey-idempotent extension or naturally idempotent HTTP methods */}}
 {{$isIdempotent := false -}}
-{{if or (eq .Method "GET") (eq .Method "HEAD") -}}
+{{if or (eq .Method "GET") (eq .Method "HEAD") (eq .Method "PUT") (eq .Method "DELETE") -}}
 {{$isIdempotent = true -}}
 {{else if .Spec -}}
 {{if .Spec.Extensions -}}
@@ -504,13 +504,13 @@ type OperationMetadata struct {
 
 // operationMetadata maps operation IDs to their metadata.
 // This is generated from x-hey-* extensions in the OpenAPI spec.
-// GET/HEAD operations are always considered idempotent for retry purposes.
+// GET/HEAD/PUT/DELETE operations are always considered idempotent for retry purposes.
 var operationMetadata = map[string]OperationMetadata{
 {{range . -}}
 {{$opid := .OperationId -}}
 {{$isIdempotent := false -}}
 {{$hasSensitive := false -}}
-{{if or (eq .Method "GET") (eq .Method "HEAD") -}}
+{{if or (eq .Method "GET") (eq .Method "HEAD") (eq .Method "PUT") (eq .Method "DELETE") -}}
 {{$isIdempotent = true -}}
 {{else if .Spec -}}
 {{if .Spec.Extensions -}}

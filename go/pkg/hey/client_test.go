@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -347,6 +348,91 @@ func TestClient_RateLimitResponse(t *testing.T) {
 	_, err := client.Get(context.Background(), "/rate-limited")
 	if err == nil {
 		t.Fatal("expected error for 429")
+	}
+}
+
+func TestClient_PutRetriesOn503(t *testing.T) {
+	var requestCount atomic.Int32
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if requestCount.Add(1) == 1 {
+			w.WriteHeader(503)
+			return
+		}
+		w.WriteHeader(200)
+		w.Write([]byte(`{"id":1}`))
+	})
+	client.httpOpts.MaxRetries = 2
+	client.httpOpts.BaseDelay = 1 * time.Millisecond
+	client.httpOpts.MaxJitter = 1 * time.Millisecond
+
+	resp, err := client.Put(context.Background(), "/time_tracks/1.json", map[string]any{"stopped": true})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if requestCount.Load() != 2 {
+		t.Fatalf("expected 2 requests (1 retry), got %d", requestCount.Load())
+	}
+}
+
+func TestClient_DeleteRetriesOn503(t *testing.T) {
+	var requestCount atomic.Int32
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if requestCount.Add(1) == 1 {
+			w.WriteHeader(503)
+			return
+		}
+		w.WriteHeader(204)
+	})
+	client.httpOpts.MaxRetries = 2
+	client.httpOpts.BaseDelay = 1 * time.Millisecond
+	client.httpOpts.MaxJitter = 1 * time.Millisecond
+
+	resp, err := client.Delete(context.Background(), "/calendar/todos/1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 204 {
+		t.Fatalf("expected 204, got %d", resp.StatusCode)
+	}
+	if requestCount.Load() != 2 {
+		t.Fatalf("expected 2 requests (1 retry), got %d", requestCount.Load())
+	}
+}
+
+func TestClient_PostDoesNotRetryOn503(t *testing.T) {
+	var requestCount atomic.Int32
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+		w.WriteHeader(503)
+	})
+	client.httpOpts.MaxRetries = 2
+
+	_, err := client.Post(context.Background(), "/messages.json", map[string]string{"subject": "test"})
+	if err == nil {
+		t.Fatal("expected error for 503 POST")
+	}
+	if requestCount.Load() != 1 {
+		t.Fatalf("expected 1 request (no retry for POST), got %d", requestCount.Load())
+	}
+}
+
+func TestClient_PatchDoesNotRetryOn503(t *testing.T) {
+	var requestCount atomic.Int32
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+		w.WriteHeader(503)
+	})
+	client.httpOpts.MaxRetries = 2
+
+	_, err := client.Patch(context.Background(), "/things/1.json", map[string]string{"name": "test"})
+	if err == nil {
+		t.Fatal("expected error for 503 PATCH")
+	}
+	if requestCount.Load() != 1 {
+		t.Fatalf("expected 1 request (no retry for PATCH), got %d", requestCount.Load())
 	}
 }
 
