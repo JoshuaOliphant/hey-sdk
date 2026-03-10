@@ -53,6 +53,24 @@ behavior-model-check:
 	@./scripts/generate-behavior-model --check
 
 #------------------------------------------------------------------------------
+# URL routes
+#------------------------------------------------------------------------------
+
+.PHONY: url-routes url-routes-check
+
+url-routes:
+	@echo "==> Generating url-routes.json..."
+	./scripts/generate-url-routes
+
+url-routes-check:
+	@echo "==> Checking url-routes.json freshness..."
+	@tmpfile=$$(mktemp) && \
+	./scripts/generate-url-routes openapi.json "$$tmpfile" > /dev/null && \
+	diff -q go/pkg/hey/url-routes.json "$$tmpfile" > /dev/null 2>&1 || \
+		{ rm -f "$$tmpfile"; echo "ERROR: url-routes.json is out of date. Run 'make url-routes'"; exit 1; }; \
+	rm -f "$$tmpfile"
+
+#------------------------------------------------------------------------------
 # Drift detection
 #------------------------------------------------------------------------------
 
@@ -286,7 +304,7 @@ audit-check:
 
 # Phase 0-1: Smithy model validation
 check-mvp: smithy-check behavior-model-check drift-check-mvp \
-           go-check go-check-drift conformance-mvp
+           url-routes-check go-check go-check-drift conformance-mvp
 	@echo "==> MVP gate passed"
 
 # Phase 3: Full surface, all languages
