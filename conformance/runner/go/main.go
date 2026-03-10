@@ -10,8 +10,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -283,7 +286,14 @@ func runConfigOverrideTest(tc TestCase, baseURL string) TestResult {
 	for _, assertion := range tc.Assertions {
 		switch assertion.Type {
 		case "requestCount":
-			expected := int(assertion.Expected.(float64))
+			expected, err := toInt(assertion.Expected)
+			if err != nil {
+				return TestResult{
+					Name:    tc.Name,
+					Passed:  false,
+					Message: fmt.Sprintf("requestCount: %v", err),
+				}
+			}
 			if expected != 0 {
 				return TestResult{
 					Name:    tc.Name,
@@ -347,7 +357,10 @@ func isEmptyOnStatus(operation string, statusCode int) bool {
 func checkAssertion(testName string, a Assertion, s checkState) TestResult {
 	switch a.Type {
 	case "requestCount":
-		expected := int(a.Expected.(float64))
+		expected, err := toInt(a.Expected)
+		if err != nil {
+			return fail(testName, "requestCount: %v", err)
+		}
 		if s.requestCount != expected {
 			return fail(testName, "Expected %d requests, got %d", expected, s.requestCount)
 		}
@@ -362,7 +375,7 @@ func checkAssertion(testName string, a Assertion, s checkState) TestResult {
 		}
 
 	case "noError":
-		// For the generated client, a non-2xx response is not an error —
+		// For the generated client, a non-2xx response is not an error --
 		// the error only occurs for transport failures.
 		// So check that both transport error is nil and response is 2xx.
 		// Exception: empty-on operations (ADR-004) treat specific status codes as success.
@@ -374,7 +387,10 @@ func checkAssertion(testName string, a Assertion, s checkState) TestResult {
 		}
 
 	case "errorCode":
-		expected := a.Expected.(string)
+		expected, ok := a.Expected.(string)
+		if !ok {
+			return fail(testName, "errorCode: expected a string value, got %T", a.Expected)
+		}
 		// For transport errors or non-2xx responses, check the SDK error code
 		if s.sdkError == nil {
 			return fail(testName, "Expected error code %q, but got no error", expected)
@@ -389,17 +405,26 @@ func checkAssertion(testName string, a Assertion, s checkState) TestResult {
 		}
 		switch a.Path {
 		case "httpStatus":
-			expected := int(a.Expected.(float64))
+			expected, err := toInt(a.Expected)
+			if err != nil {
+				return fail(testName, "errorField.httpStatus: %v", err)
+			}
 			if s.sdkError.HTTPStatus != expected {
 				return fail(testName, "Expected error httpStatus %d, got %d", expected, s.sdkError.HTTPStatus)
 			}
 		case "retryable":
-			expected := a.Expected.(bool)
+			expected, ok := a.Expected.(bool)
+			if !ok {
+				return fail(testName, "errorField.retryable: expected a bool value, got %T", a.Expected)
+			}
 			if s.sdkError.Retryable != expected {
 				return fail(testName, "Expected error retryable=%v, got %v", expected, s.sdkError.Retryable)
 			}
 		case "requestId":
-			expected := a.Expected.(string)
+			expected, ok := a.Expected.(string)
+			if !ok {
+				return fail(testName, "errorField.requestId: expected a string value, got %T", a.Expected)
+			}
 			if s.sdkError.RequestID != expected {
 				return fail(testName, "Expected error requestId %q, got %q", expected, s.sdkError.RequestID)
 			}
@@ -408,13 +433,19 @@ func checkAssertion(testName string, a Assertion, s checkState) TestResult {
 		}
 
 	case "statusCode":
-		expected := int(a.Expected.(float64))
+		expected, err := toInt(a.Expected)
+		if err != nil {
+			return fail(testName, "statusCode: %v", err)
+		}
 		if s.lastStatus != expected {
 			return fail(testName, "Expected status code %d, got %d", expected, s.lastStatus)
 		}
 
 	case "requestPath":
-		expected := a.Expected.(string)
+		expected, ok := a.Expected.(string)
+		if !ok {
+			return fail(testName, "requestPath: expected a string value, got %T", a.Expected)
+		}
 		if len(s.requestPaths) == 0 {
 			return fail(testName, "Expected a request, but none were recorded")
 		}
@@ -432,22 +463,62 @@ func checkAssertion(testName string, a Assertion, s checkState) TestResult {
 		}
 
 	case "responseMeta":
-		// responseMeta assertions check metadata parsed from response headers.
-		// For now, we verify the mock response had the expected header.
 		switch a.Path {
 		case "totalCount":
-			// The runner doesn't parse X-Total-Count since we use the generated client.
-			// Verify the header was set by the mock server (test is about SDK capability).
-			// TODO: test via hey.Client service layer when conformance supports it.
+			if s.sdkResp == nil {
+				return fail(testName, "No HTTP response to check X-Total-Count header")
+			}
+			header := s.sdkResp.Header.Get("X-Total-Count")
+			if header == "" {
+				return fail(testName, "X-Total-Count header not present in response")
+			}
+			expected, err := toInt(a.Expected)
+			if err != nil {
+				return fail(testName, "responseMeta.totalCount: %v", err)
+			}
+			actual, err := strconv.Atoi(header)
+			if err != nil {
+				return fail(testName, "X-Total-Count header %q is not a valid integer", header)
+			}
+			if actual != expected {
+				return fail(testName, "Expected X-Total-Count=%d, got %d", expected, actual)
+			}
 		default:
 			return fail(testName, "Unknown responseMeta path: %s", a.Path)
 		}
 
 	case "urlOrigin":
-		// urlOrigin assertions verify pagination URL origin validation.
-		// The generated client doesn't handle pagination directly (that's hey.Client).
-		// For now, we verify the mock server sent only the expected number of requests.
-		// The requestCount assertion handles the validation indirectly.
+		expected, ok := a.Expected.(string)
+		if !ok {
+			return fail(testName, "urlOrigin: expected a string value, got %T", a.Expected)
+		}
+		if expected == "rejected" {
+			if s.sdkResp == nil {
+				return fail(testName, "No HTTP response to check Link header origin")
+			}
+			linkHeader := s.sdkResp.Header.Get("Link")
+			if linkHeader == "" {
+				return fail(testName, "No Link header in response to validate origin")
+			}
+			nextURL := extractNextLinkURL(linkHeader)
+			if nextURL == "" {
+				return fail(testName, "No next URL found in Link header: %s", linkHeader)
+			}
+			serverURL := s.sdkResp.Request.URL
+			linkParsed, err := url.Parse(nextURL)
+			if err != nil {
+				return fail(testName, "Failed to parse Link URL %q: %v", nextURL, err)
+			}
+			if linkParsed.IsAbs() && !strings.EqualFold(linkParsed.Host, serverURL.Host) {
+				// Cross-origin Link URL confirms the test scenario for rejection
+			} else if !linkParsed.IsAbs() {
+				return fail(testName, "Expected cross-origin Link URL for rejection test, but got relative URL: %s", nextURL)
+			} else if strings.EqualFold(linkParsed.Scheme, serverURL.Scheme) {
+				return fail(testName, "Expected cross-origin Link URL for rejection test, but %s has same origin as server", nextURL)
+			}
+		} else {
+			return fail(testName, "urlOrigin: unsupported expected value %q (only \"rejected\" is supported)", expected)
+		}
 
 	default:
 		return fail(testName, "Unknown assertion type: %s", a.Type)
@@ -462,6 +533,73 @@ func fail(testName, format string, args ...interface{}) TestResult {
 		Passed:  false,
 		Message: fmt.Sprintf(format, args...),
 	}
+}
+
+// toInt safely converts an interface{} (typically from JSON) to int.
+func toInt(v interface{}) (int, error) {
+	switch n := v.(type) {
+	case float64:
+		if n != float64(int(n)) {
+			return 0, fmt.Errorf("float64 %v is not an integer", n)
+		}
+		return int(n), nil
+	case int:
+		return n, nil
+	case json.Number:
+		i, err := n.Int64()
+		if err != nil {
+			return 0, fmt.Errorf("cannot convert json.Number %q to int: %w", n.String(), err)
+		}
+		return int(i), nil
+	case string:
+		i, err := strconv.Atoi(n)
+		if err != nil {
+			return 0, fmt.Errorf("cannot convert string %q to int: %w", n, err)
+		}
+		return i, nil
+	default:
+		return 0, fmt.Errorf("unsupported type %T for integer conversion", v)
+	}
+}
+
+// extractNextLinkURL parses a Link header to find the URL with rel="next".
+// Instead of splitting on commas (which breaks if URLs contain commas), we
+// scan for <...> blocks and inspect the following parameters for rel="next".
+func extractNextLinkURL(linkHeader string) string {
+	remaining := linkHeader
+	for len(remaining) > 0 {
+		start := strings.Index(remaining, "<")
+		if start < 0 {
+			break
+		}
+		end := strings.Index(remaining[start:], ">")
+		if end < 0 {
+			break
+		}
+		end += start // adjust to absolute index
+		uri := remaining[start+1 : end]
+
+		// Find the parameters after ">", up to the next "<" or end of string
+		rest := remaining[end+1:]
+		nextLink := strings.Index(rest, "<")
+		var params string
+		if nextLink >= 0 {
+			params = rest[:nextLink]
+		} else {
+			params = rest
+		}
+
+		if strings.Contains(params, `rel="next"`) {
+			return uri
+		}
+
+		if nextLink >= 0 {
+			remaining = rest[nextLink:]
+		} else {
+			break
+		}
+	}
+	return ""
 }
 
 func executeOperation(client *generated.Client, ctx context.Context, tc TestCase) (*http.Response, error) {
