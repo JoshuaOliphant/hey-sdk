@@ -112,6 +112,52 @@ jobs:
       - name: Run conformance tests
         run: go run .
 
+  api-compat:
+    name: API Compatibility
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v6
+
+      - name: Checkout base
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go/go.mod'
+          cache-dependency-path: 'go/go.sum'
+
+      - name: Install apidiff
+        run: go install golang.org/x/exp/cmd/apidiff@v0.0.0-20250305212735-054e65f0b394
+
+      - name: Check API compatibility
+        # Compares go/pkg/hey — the sole exported package (internal/ is not public API).
+        # Each apidiff invocation runs inside its respective module directory so
+        # go list can resolve the package.
+        run: |
+          echo "Checking Go SDK API compatibility..."
+          (cd base/go && apidiff -w /tmp/base.api ./pkg/hey)
+          CHANGES=$(cd go && apidiff -incompatible /tmp/base.api ./pkg/hey 2>/tmp/apidiff.stderr) || status=$?
+          status=${status:-0}
+          if [ "$status" -ne 0 ]; then
+            echo "::error::apidiff execution failed (exit $status)"
+            cat /tmp/apidiff.stderr
+            exit "$status"
+          fi
+          rm -f /tmp/apidiff.stderr
+          if [ -n "$CHANGES" ]; then
+            echo "::error::Incompatible API changes detected"
+            echo "$CHANGES"
+            exit 1
+          else
+            echo "No breaking API changes detected"
+          fi
+
   rubric-check:
     name: Rubric Check
     runs-on: ubuntu-latest
