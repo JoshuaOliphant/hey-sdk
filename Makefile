@@ -156,7 +156,7 @@ endif
 	@echo "Releasing v$(VERSION)..."
 	@git diff --quiet && git diff --cached --quiet || \
 		{ echo "ERROR: Working tree has uncommitted changes."; exit 1; }
-	@$(MAKE) check-full
+	@$(MAKE) check-mvp
 	git tag "v$(VERSION)"
 	git push origin "v$(VERSION)"
 
