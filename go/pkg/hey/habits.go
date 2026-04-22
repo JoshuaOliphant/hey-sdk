@@ -26,7 +26,7 @@ func NewHabitsService(client *Client) *HabitsService {
 func (s *HabitsService) Create(ctx context.Context, title string, days []int32) (result *generated.Recording, err error) {
 	op := OperationInfo{
 		Service: "Habits", Operation: "CreateHabit",
-		ResourceType: "calendar_habit", IsMutation: true,
+		ResourceType: "habit", IsMutation: true,
 	}
 	if gater, ok := s.client.hooks.(GatingHooks); ok {
 		if ctx, err = gater.OnOperationGate(ctx, op); err != nil {
@@ -58,7 +58,7 @@ func (s *HabitsService) Create(ctx context.Context, title string, days []int32) 
 func (s *HabitsService) Delete(ctx context.Context, habitID int64) (err error) {
 	op := OperationInfo{
 		Service: "Habits", Operation: "DeleteHabit",
-		ResourceType: "calendar_habit", IsMutation: true, ResourceID: habitID,
+		ResourceType: "habit", IsMutation: true, ResourceID: habitID,
 	}
 	if gater, ok := s.client.hooks.(GatingHooks); ok {
 		if ctx, err = gater.OnOperationGate(ctx, op); err != nil {

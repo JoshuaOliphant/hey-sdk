@@ -766,6 +766,30 @@ func TestHabitsService_Create_NoDays(t *testing.T) {
 	}
 }
 
+func TestHabitsService_Create_EmptyDays(t *testing.T) {
+	client := newMutationTestClientWithValidation(t, "POST", "/calendar/habits.json",
+		func(t *testing.T, body map[string]any) {
+			t.Helper()
+			habit, ok := body["calendar_habit"].(map[string]any)
+			if !ok {
+				t.Fatal("missing calendar_habit wrapper")
+			}
+			if _, hasDays := habit["days"]; hasDays {
+				t.Error("days should be omitted when empty slice")
+			}
+		},
+		`{"id":3,"type":"CalendarHabit"}`,
+	)
+
+	result, err := client.Habits().Create(context.Background(), "Meditate", []int32{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+}
+
 func TestHabitsService_Delete(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "DELETE" {
