@@ -762,6 +762,12 @@ func TestHabitsService_Create_NoDays(t *testing.T) {
 
 func TestHabitsService_Delete(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "DELETE" {
+			t.Errorf("expected DELETE, got %s", r.Method)
+		}
+		if !pathMatch("/calendar/habits/%s", r.URL.Path) {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
 		w.WriteHeader(204)
 	}))
 	defer server.Close()
@@ -772,6 +778,39 @@ func TestHabitsService_Delete(t *testing.T) {
 	err := client.Habits().Delete(context.Background(), 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestHabitsService_Create_Error(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(422)
+	}))
+	defer server.Close()
+
+	cfg := &Config{BaseURL: server.URL}
+	client := NewClient(cfg, &StaticTokenProvider{Token: "test-token"})
+
+	result, err := client.Habits().Create(context.Background(), "Exercise", nil)
+	if err == nil {
+		t.Fatal("expected error for 422 response, got nil")
+	}
+	if result != nil {
+		t.Errorf("expected nil result on error, got %v", result)
+	}
+}
+
+func TestHabitsService_Delete_Error(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+	}))
+	defer server.Close()
+
+	cfg := &Config{BaseURL: server.URL}
+	client := NewClient(cfg, &StaticTokenProvider{Token: "test-token"})
+
+	err := client.Habits().Delete(context.Background(), 999)
+	if err == nil {
+		t.Fatal("expected error for 404 response, got nil")
 	}
 }
 

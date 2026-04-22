@@ -21,7 +21,8 @@ func NewHabitsService(client *Client) *HabitsService {
 // Create creates a new habit.
 //
 // The HEY API expects the body wrapped as {calendar_habit: {title, days}}.
-// Pass nil for days to accept the server default (all days).
+// Pass nil or an empty slice for days to omit it from the request; the server
+// then applies its default (all days). A non-empty slice is sent verbatim.
 func (s *HabitsService) Create(ctx context.Context, title string, days []int) (result *generated.Recording, err error) {
 	op := OperationInfo{
 		Service: "Habits", Operation: "CreateHabit",
@@ -73,7 +74,8 @@ func (s *HabitsService) Delete(ctx context.Context, habitID int64) (err error) {
 	if err != nil {
 		return err
 	}
-	return CheckResponse(resp.HTTPResponse)
+	err = CheckResponse(resp.HTTPResponse)
+	return err
 }
 
 // Complete marks a habit as complete for a given day.
